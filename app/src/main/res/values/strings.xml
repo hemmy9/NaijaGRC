@@ -17,6 +17,7 @@
     <string name="btn_edit_profile">Edit Profile</string>
     <string name="btn_export_active_pdf">Save Policy PDF</string>
     <string name="btn_export_bundle_pdf">Save All (%1$d) Bundle PDF</string>
+    <string name="btn_preview_export">Preview Export</string>
     <string name="btn_share_pdf">Share PDF</string>
     <string name="btn_copy_policy">Copy Text</string>
     <string name="btn_version_history">History (%1$d)</string>

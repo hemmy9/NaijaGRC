@@ -2,6 +2,7 @@ package com.example.ui
 
 import androidx.lifecycle.ViewModel
 import com.example.domain.CompanySize
+import com.example.domain.GapAnalysisReport
 import com.example.domain.GeneratedPolicy
 import com.example.domain.IndustrySector
 import com.example.domain.OrganizationProfile
@@ -24,7 +25,8 @@ enum class WorkspaceScreen {
 
 enum class WorkspaceTab {
     CLAUSES,
-    CHECKLIST
+    CHECKLIST,
+    GAP_ANALYSIS
 }
 
 data class GrcUiState(
@@ -47,7 +49,12 @@ data class GrcUiState(
     val versionHistoryByType: Map<PolicyType, List<PolicyVersionEntry>> = emptyMap(),
     val activeVersionByType: Map<PolicyType, String> = emptyMap(),
     val checkedChecklistIds: Set<String> = emptySet(),
+    val gapReport: GapAnalysisReport? = null,
     val clauseSearchQuery: String = "",
+    val showExportPreview: Boolean = false,
+    val previewBundleMode: Boolean = true,
+    val previewIncludeChecklists: Boolean = true,
+    val previewIncludeGapAnalysis: Boolean = true,
     val isExportingPdf: Boolean = false,
     val statusBannerMessage: String? = null
 ) {
@@ -195,7 +202,6 @@ class GrcViewModel : ViewModel() {
                 policy = policy,
                 profileSnapshot = profile
             )
-            // Store newest first for intuitive timeline display
             updatedHistory[policy.type] = listOf(entry) + existing
             updatedActiveVersions[policy.type] = policy.version
         }
@@ -207,6 +213,12 @@ class GrcViewModel : ViewModel() {
             firstType
         }
 
+        val gapReport = PolicyGeneratorEngine.analyzeGaps(
+            profile = profile,
+            generatedPolicies = suite,
+            checkedChecklistIds = current.checkedChecklistIds
+        )
+
         _uiState.update {
             it.copy(
                 companyNameError = false,
@@ -216,12 +228,64 @@ class GrcViewModel : ViewModel() {
                 selectedPolicyType = nextSelectedType,
                 versionHistoryByType = updatedHistory,
                 activeVersionByType = updatedActiveVersions,
+                gapReport = gapReport,
                 clauseSearchQuery = "",
                 activeScreen = WorkspaceScreen.POLICIES,
                 workspaceTab = WorkspaceTab.CLAUSES,
                 statusBannerMessage = if (updatedHistory.values.any { list -> list.size > 1 }) {
                     "Policies updated & new versions logged in version control."
                 } else null
+            )
+        }
+    }
+
+    fun addMissingPolicyFromGap(type: PolicyType) {
+        val current = _uiState.value
+        val profile = current.generatedProfile ?: return
+        if (current.generatedPolicies.any { it.type == type }) return
+
+        val updatedSelection = current.selectedPolicyTypes + type
+        val existingHistory = current.versionHistoryByType[type].orEmpty()
+        val version = if (existingHistory.isEmpty()) "v1.0" else "v1.${existingHistory.size}"
+
+        val newPolicy = PolicyGeneratorEngine.generateSuite(
+            profile = profile,
+            selectedTypes = setOf(type),
+            versionMap = mapOf(type to version)
+        ).firstOrNull() ?: return
+
+        val entry = PolicyVersionEntry(
+            versionLabel = version,
+            timestamp = currentTimestamp(),
+            changeSummary = "Added from Gap Analysis remediation",
+            policy = newPolicy,
+            profileSnapshot = profile
+        )
+
+        val updatedHistory = current.versionHistoryByType.toMutableMap().apply {
+            put(type, listOf(entry) + existingHistory)
+        }
+        val updatedActiveVersions = current.activeVersionByType.toMutableMap().apply {
+            put(type, version)
+        }
+        val updatedPolicies = PolicyType.entries.mapNotNull { t ->
+            if (t == type) newPolicy else current.generatedPolicies.firstOrNull { it.type == t }
+        }
+        val gapReport = PolicyGeneratorEngine.analyzeGaps(
+            profile = profile,
+            generatedPolicies = updatedPolicies,
+            checkedChecklistIds = current.checkedChecklistIds
+        )
+
+        _uiState.update {
+            it.copy(
+                selectedPolicyTypes = updatedSelection,
+                generatedPolicies = updatedPolicies,
+                selectedPolicyType = type,
+                versionHistoryByType = updatedHistory,
+                activeVersionByType = updatedActiveVersions,
+                gapReport = gapReport,
+                statusBannerMessage = "${type.shortTitle} generated ($version) — gap remediated!"
             )
         }
     }
@@ -274,12 +338,18 @@ class GrcViewModel : ViewModel() {
         val updatedPolicies = current.generatedPolicies.map {
             if (it.type == type) revisedPolicy else it
         }
+        val gapReport = PolicyGeneratorEngine.analyzeGaps(
+            profile = profile,
+            generatedPolicies = updatedPolicies,
+            checkedChecklistIds = current.checkedChecklistIds
+        )
 
         _uiState.update {
             it.copy(
                 generatedPolicies = updatedPolicies,
                 versionHistoryByType = updatedHistory,
                 activeVersionByType = updatedActiveVersions,
+                gapReport = gapReport,
                 statusBannerMessage = "${type.shortTitle} updated to $nextVer ($cleanNote)."
             )
         }
@@ -296,12 +366,18 @@ class GrcViewModel : ViewModel() {
         val updatedActiveVersions = current.activeVersionByType.toMutableMap().apply {
             put(type, targetEntry.versionLabel)
         }
+        val gapReport = PolicyGeneratorEngine.analyzeGaps(
+            profile = targetEntry.profileSnapshot,
+            generatedPolicies = updatedPolicies,
+            checkedChecklistIds = current.checkedChecklistIds
+        )
 
         _uiState.update {
             it.copy(
                 generatedPolicies = updatedPolicies,
                 generatedProfile = targetEntry.profileSnapshot,
                 activeVersionByType = updatedActiveVersions,
+                gapReport = gapReport,
                 statusBannerMessage = "Reverted ${type.shortTitle} to ${targetEntry.versionLabel} (${targetEntry.timestamp})."
             )
         }
@@ -328,7 +404,19 @@ class GrcViewModel : ViewModel() {
             } else {
                 current.checkedChecklistIds + key
             }
-            current.copy(checkedChecklistIds = updated)
+            val profile = current.generatedProfile
+            val updatedGapReport = if (profile != null) {
+                PolicyGeneratorEngine.analyzeGaps(
+                    profile = profile,
+                    generatedPolicies = current.generatedPolicies,
+                    checkedChecklistIds = updated
+                )
+            } else current.gapReport
+
+            current.copy(
+                checkedChecklistIds = updated,
+                gapReport = updatedGapReport
+            )
         }
     }
 
@@ -336,10 +424,36 @@ class GrcViewModel : ViewModel() {
         _uiState.update { it.copy(clauseSearchQuery = query) }
     }
 
+    fun openExportPreview(bundleMode: Boolean = true) {
+        _uiState.update {
+            it.copy(
+                showExportPreview = true,
+                previewBundleMode = bundleMode
+            )
+        }
+    }
+
+    fun closeExportPreview() {
+        _uiState.update { it.copy(showExportPreview = false) }
+    }
+
+    fun setPreviewBundleMode(bundleMode: Boolean) {
+        _uiState.update { it.copy(previewBundleMode = bundleMode) }
+    }
+
+    fun togglePreviewIncludeChecklists(include: Boolean) {
+        _uiState.update { it.copy(previewIncludeChecklists = include) }
+    }
+
+    fun togglePreviewIncludeGapAnalysis(include: Boolean) {
+        _uiState.update { it.copy(previewIncludeGapAnalysis = include) }
+    }
+
     fun navigateBackToForm() {
         _uiState.update {
             it.copy(
                 activeScreen = WorkspaceScreen.FORM,
+                showExportPreview = false,
                 statusBannerMessage = null
             )
         }

@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.CheckCircle
@@ -41,9 +42,11 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Preview
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -74,8 +77,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.ChecklistItem
+import com.example.domain.GapAnalysisReport
+import com.example.domain.GapCategory
+import com.example.domain.GapSeverity
 import com.example.domain.GeneratedPolicy
 import com.example.domain.OrganizationProfile
+import com.example.domain.PolicyGapItem
 import com.example.domain.PolicySection
 import com.example.domain.PolicyType
 import com.example.domain.PolicyVersionEntry
@@ -96,10 +103,12 @@ fun PolicyWorkspaceScreen(
     onSelectPolicy: (PolicyType) -> Unit,
     onSelectTab: (WorkspaceTab) -> Unit,
     onToggleChecklistItem: (PolicyType, String) -> Unit,
+    onAddMissingPolicy: (PolicyType) -> Unit,
     onSearchChange: (String) -> Unit,
     onCopyPolicy: (GeneratedPolicy, OrganizationProfile) -> Unit,
     onCreateRevision: (PolicyType, String, String) -> Unit,
     onRevertVersion: (PolicyType, String) -> Unit,
+    onOpenExportPreview: (Boolean) -> Unit,
     onExportActivePdf: (GeneratedPolicy) -> Unit,
     onExportBundlePdf: () -> Unit,
     onShareBundlePdf: () -> Unit,
@@ -117,6 +126,14 @@ fun PolicyWorkspaceScreen(
     val availableTypes = remember(uiState.generatedPolicies) {
         uiState.generatedPolicies.map { it.type }
     }
+    val progressByType = remember(uiState.generatedPolicies, uiState.checkedChecklistIds) {
+        uiState.generatedPolicies.associate { p ->
+            val total = p.checklist.size.coerceAtLeast(1)
+            val done = p.checklist.count { "${p.type.name}_${it.id}" in uiState.checkedChecklistIds }
+            p.type to (done.toFloat() / total.toFloat())
+        }
+    }
+    var gapFilter by remember { mutableStateOf("ALL") }
 
     val historyEntries = uiState.activePolicyHistory
     val activeVersionEntry = uiState.activeVersionEntry
@@ -279,30 +296,39 @@ fun PolicyWorkspaceScreen(
                 availableTypes = availableTypes,
                 selectedType = activePolicy.type,
                 versionByType = uiState.activeVersionByType,
+                progressByType = progressByType,
                 onSelectPolicy = onSelectPolicy,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
 
-            // 3D Segmented Mode Switcher: Policy Clauses vs Compliance Checklist
+            // 3D Segmented Mode Switcher: Clauses | Checklist | Gap & Progress
+            val gapCount = uiState.gapReport?.gaps?.size ?: 0
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 WorkspaceModePill(
-                    title = "Policy Clauses (${activePolicy.sections.size})",
+                    title = "Clauses (${activePolicy.sections.size})",
                     selected = uiState.workspaceTab == WorkspaceTab.CLAUSES,
                     onClick = { onSelectTab(WorkspaceTab.CLAUSES) },
                     modifier = Modifier.weight(1f),
                     testTag = "tab_policy_clauses"
                 )
                 WorkspaceModePill(
-                    title = "Action Checklist ($completedCount/${checklistItems.size})",
+                    title = "Checklist ($completedCount/${checklistItems.size})",
                     selected = uiState.workspaceTab == WorkspaceTab.CHECKLIST,
                     onClick = { onSelectTab(WorkspaceTab.CHECKLIST) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1.1f),
                     testTag = "tab_action_checklist"
+                )
+                WorkspaceModePill(
+                    title = "Gaps ($gapCount)",
+                    selected = uiState.workspaceTab == WorkspaceTab.GAP_ANALYSIS,
+                    onClick = { onSelectTab(WorkspaceTab.GAP_ANALYSIS) },
+                    modifier = Modifier.weight(0.9f),
+                    testTag = "tab_gap_analysis"
                 )
             }
 
@@ -537,7 +563,7 @@ fun PolicyWorkspaceScreen(
                                 }
                             }
                         }
-                    } else {
+                    } else if (currentTab == WorkspaceTab.CHECKLIST) {
                         // Actionable Compliance Checklist View
                         item(key = "checklist_progress_${policy.id}") {
                             val total = policy.checklist.size.coerceAtLeast(1)
@@ -587,6 +613,89 @@ fun PolicyWorkspaceScreen(
                                 onToggle = { onToggleChecklistItem(policy.type, item.id) }
                             )
                         }
+                    } else {
+                        // Policy Progress & Gap Analysis View
+                        val report = uiState.gapReport
+                        if (report != null) {
+                            item(key = "gap_progress_overview") {
+                                PolicyProgressOverviewCard(report = report)
+                            }
+
+                            item(key = "gap_filter_row") {
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    listOf(
+                                        "ALL" to "All (${report.gaps.size})",
+                                        "CRITICAL" to "Critical (${report.criticalCount})",
+                                        "MISSING" to "Missing Policies",
+                                        "CONTROLS" to "Open Controls"
+                                    ).forEach { (key, label) ->
+                                        val isSelected = gapFilter == key
+                                        Surface(
+                                            modifier = Modifier
+                                                .minimumInteractiveComponentSize()
+                                                .clip(RoundedCornerShape(50))
+                                                .clickable { gapFilter = key }
+                                                .testTag("gap_filter_${key.lowercase()}"),
+                                            shape = RoundedCornerShape(50),
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                                            border = BorderStroke(
+                                                1.dp,
+                                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                            )
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            val displayedGaps = report.gaps.filter { gap ->
+                                when (gapFilter) {
+                                    "CRITICAL" -> gap.severity == GapSeverity.CRITICAL
+                                    "MISSING" -> gap.category == GapCategory.MISSING_POLICY
+                                    "CONTROLS" -> gap.category == GapCategory.OPEN_CONTROL
+                                    else -> true
+                                }
+                            }
+
+                            items(
+                                items = displayedGaps,
+                                key = { it.id }
+                            ) { gap ->
+                                GapAnalysisItemCard(
+                                    gap = gap,
+                                    onAddMissingPolicy = { onAddMissingPolicy(gap.policyType) },
+                                    onResolveControl = { itemId ->
+                                        onToggleChecklistItem(gap.policyType, itemId)
+                                    }
+                                )
+                            }
+
+                            if (displayedGaps.isEmpty()) {
+                                item(key = "no_gaps") {
+                                    Spatial3DCard(
+                                        depth = 4.dp,
+                                        cornerRadius = 18.dp,
+                                        surfaceColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                                        contentPadding = PaddingValues(18.dp)
+                                    ) {
+                                        Text(
+                                            text = "Zero gaps in this filter! All selected NDPA 2023 & ISO 27001 controls are accounted for.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     item(key = "bottom_spacer") {
@@ -610,16 +719,31 @@ fun PolicyWorkspaceScreen(
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Spatial3DButton(
-                        text = stringResource(R.string.btn_export_bundle_pdf, uiState.generatedPolicies.size),
-                        onClick = onExportBundlePdf,
-                        icon = Icons.Filled.PictureAsPdf,
-                        containerColor = Emerald700,
-                        plinthColor = Emerald900,
-                        enabled = !uiState.isExportingPdf,
-                        testTag = "export_bundle_pdf_button",
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Spatial3DButton(
+                            text = stringResource(R.string.btn_preview_export),
+                            onClick = { onOpenExportPreview(true) },
+                            icon = Icons.Filled.Preview,
+                            containerColor = Color(0xFF0F766E),
+                            plinthColor = Color(0xFF134E4A),
+                            enabled = !uiState.isExportingPdf,
+                            testTag = "preview_export_button",
+                            modifier = Modifier.weight(0.92f)
+                        )
+                        Spatial3DButton(
+                            text = stringResource(R.string.btn_export_bundle_pdf, uiState.generatedPolicies.size),
+                            onClick = onExportBundlePdf,
+                            icon = Icons.Filled.PictureAsPdf,
+                            containerColor = Emerald700,
+                            plinthColor = Emerald900,
+                            enabled = !uiState.isExportingPdf,
+                            testTag = "export_bundle_pdf_button",
+                            modifier = Modifier.weight(1.15f)
+                        )
+                    }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -977,6 +1101,222 @@ private fun PolicyClauseCard(section: PolicySection) {
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
                     textColor = MaterialTheme.colorScheme.primary
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PolicyProgressOverviewCard(report: GapAnalysisReport) {
+    Spatial3DCard(
+        depth = 6.dp,
+        cornerRadius = 20.dp,
+        surfaceColor = MaterialTheme.colorScheme.surface,
+        contentPadding = PaddingValues(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "Suite Compliance Progress",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "${report.policyCoverageCount}/${report.totalPolicyTemplates} Policies • ${report.completedControls}/${report.totalControlsInGenerated} Controls Done",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Text(
+                    text = "${report.overallReadinessPercent}%",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        LinearProgressIndicator(
+            progress = { report.overallReadinessPercent / 100f },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(9.dp)
+                .clip(RoundedCornerShape(50))
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        report.perPolicyProgress.forEach { metric ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = metric.policyType.shortTitle,
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.width(126.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                LinearProgressIndicator(
+                    progress = { metric.fraction },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(50))
+                )
+                Text(
+                    text = "${metric.completedSteps}/${metric.totalSteps}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ControlTagPill(
+                text = "${report.criticalCount} Critical",
+                containerColor = Color(0xFFFEE2E2),
+                textColor = Color(0xFFB91C1C)
+            )
+            ControlTagPill(
+                text = "${report.highCount} High",
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                textColor = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            ControlTagPill(
+                text = "${report.mediumCount} Medium",
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                textColor = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun GapAnalysisItemCard(
+    gap: PolicyGapItem,
+    onAddMissingPolicy: () -> Unit,
+    onResolveControl: (String) -> Unit
+) {
+    val (sevBg, sevFg) = when (gap.severity) {
+        GapSeverity.CRITICAL -> Color(0xFFFEE2E2) to Color(0xFFB91C1C)
+        GapSeverity.HIGH -> Color(0xFFFEF3C7) to Color(0xFFB45309)
+        GapSeverity.MEDIUM -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Spatial3DCard(
+        depth = 4.dp,
+        cornerRadius = 18.dp,
+        contentPadding = PaddingValues(15.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                ControlTagPill(
+                    text = gap.severity.label.uppercase(),
+                    containerColor = sevBg,
+                    textColor = sevFg
+                )
+                ControlTagPill(
+                    text = gap.category.label,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    textColor = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                ControlTagPill(
+                    text = gap.controlReference,
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    textColor = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.WarningAmber,
+                contentDescription = null,
+                tint = sevFg,
+                modifier = Modifier.size(18.dp)
+            )
+            Text(
+                text = gap.title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = gap.description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = "Remediation: ${gap.remediation}",
+            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+        if (gap.category == GapCategory.MISSING_POLICY) {
+            Button(
+                onClick = onAddMissingPolicy,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("remediate_missing_${gap.policyType.name.lowercase()}")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.AddCircleOutline,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Generate ${gap.policyType.shortTitle}")
+            }
+        } else if (gap.checklistItemId != null) {
+            OutlinedButton(
+                onClick = { onResolveControl(gap.checklistItemId) },
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("resolve_gap_${gap.checklistItemId}")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.CheckCircle,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Mark Control Implemented")
             }
         }
     }

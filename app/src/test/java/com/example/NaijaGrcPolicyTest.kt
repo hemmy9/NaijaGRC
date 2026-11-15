@@ -111,4 +111,37 @@ class NaijaGrcPolicyTest {
         assertTrue(plainText.contains("NDPA 2023"))
         assertTrue(plainText.contains("ISO 27001:2022"))
     }
+
+    @Test
+    fun `computes policy progress and gap analysis with missing-policy remediation`() {
+        val vm = GrcViewModel()
+        vm.onCompanyNameChange("PayNaija Ltd")
+        vm.selectCoreThreePolicies() // 3 of 5 selected -> Incident Response & Business Continuity missing
+        vm.generatePolicies()
+
+        val initialGap = vm.uiState.value.gapReport!!
+        assertEquals(3, initialGap.policyCoverageCount)
+        assertEquals(5, initialGap.totalPolicyTemplates)
+        assertEquals(0, initialGap.completedControls)
+        assertTrue(initialGap.criticalCount >= 1)
+
+        // Toggle 2 checklist items and verify readiness increases
+        vm.toggleChecklistItem(PolicyType.DATA_PROTECTION, "dpa_1")
+        vm.toggleChecklistItem(PolicyType.DATA_PROTECTION, "dpa_2")
+        val updatedGap = vm.uiState.value.gapReport!!
+        assertEquals(2, updatedGap.completedControls)
+        assertTrue(updatedGap.overallReadinessPercent > initialGap.overallReadinessPercent)
+
+        // Remediate missing Incident Response policy directly from Gap Analysis
+        vm.addMissingPolicyFromGap(PolicyType.INCIDENT_RESPONSE)
+        assertEquals(4, vm.uiState.value.generatedPolicies.size)
+        assertEquals(4, vm.uiState.value.gapReport!!.policyCoverageCount)
+
+        // Toggle Export Preview Mode
+        vm.openExportPreview(bundleMode = true)
+        assertTrue(vm.uiState.value.showExportPreview)
+        assertTrue(vm.uiState.value.previewBundleMode)
+        vm.closeExportPreview()
+        assertTrue(!vm.uiState.value.showExportPreview)
+    }
 }

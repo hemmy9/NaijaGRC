@@ -61,12 +61,14 @@ object GrcPdfExporter {
         context: Context,
         uri: Uri,
         profile: OrganizationProfile,
-        policies: List<GeneratedPolicy>
+        policies: List<GeneratedPolicy>,
+        includeChecklists: Boolean = true,
+        gapReport: com.example.domain.GapAnalysisReport? = null
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val resolver = context.contentResolver
             resolver.openOutputStream(uri)?.use { stream ->
-                renderPdfToStream(profile, policies, stream)
+                renderPdfToStream(profile, policies, includeChecklists, gapReport, stream)
             } ?: error("Unable to open destination file stream.")
         }
     }
@@ -74,14 +76,16 @@ object GrcPdfExporter {
     suspend fun createShareablePdfUri(
         context: Context,
         profile: OrganizationProfile,
-        policies: List<GeneratedPolicy>
+        policies: List<GeneratedPolicy>,
+        includeChecklists: Boolean = true,
+        gapReport: com.example.domain.GapAnalysisReport? = null
     ): Result<Uri> = withContext(Dispatchers.IO) {
         runCatching {
             val pdfDir = File(context.cacheDir, "pdfs").apply { mkdirs() }
             val fileName = buildSuggestedFileName(profile.companyName, policies)
             val file = File(pdfDir, fileName)
             FileOutputStream(file).use { stream ->
-                renderPdfToStream(profile, policies, stream)
+                renderPdfToStream(profile, policies, includeChecklists, gapReport, stream)
             }
             FileProvider.getUriForFile(
                 context,
@@ -94,6 +98,8 @@ object GrcPdfExporter {
     private fun renderPdfToStream(
         profile: OrganizationProfile,
         policies: List<GeneratedPolicy>,
+        includeChecklists: Boolean,
+        gapReport: com.example.domain.GapAnalysisReport?,
         outputStream: OutputStream
     ) {
         val document = PdfDocument()
@@ -105,7 +111,10 @@ object GrcPdfExporter {
                 } else {
                     state.startFirstPage(policy)
                 }
-                state.drawPolicyContent(policy)
+                state.drawPolicyContent(policy, includeChecklists)
+            }
+            if (gapReport != null && policies.isNotEmpty()) {
+                state.drawGapSummarySection(policies.last(), gapReport)
             }
             state.finishCurrentPage()
             document.writeTo(outputStream)
@@ -244,7 +253,7 @@ object GrcPdfExporter {
             cursorY += 92f
         }
 
-        fun drawPolicyContent(policy: GeneratedPolicy) {
+        fun drawPolicyContent(policy: GeneratedPolicy, includeChecklists: Boolean) {
             // Executive Summary
             ensureSpace(policy, 56f)
             drawWrappedText(policy, policy.summary, bodyPaint, MARGIN_X, CONTENT_WIDTH, 14f)
@@ -285,7 +294,7 @@ object GrcPdfExporter {
             }
 
             // Actionable Compliance Implementation Checklist
-            if (policy.checklist.isNotEmpty()) {
+            if (includeChecklists && policy.checklist.isNotEmpty()) {
                 ensureSpace(policy, 52f)
                 canvas?.drawText("ACTIONABLE COMPLIANCE IMPLEMENTATION CHECKLIST", MARGIN_X, cursorY, monoPaint)
                 cursorY += 16f
@@ -327,6 +336,60 @@ object GrcPdfExporter {
                 )
                 cursorY += 72f
             }
+        }
+
+        fun drawGapSummarySection(
+            anchorPolicy: GeneratedPolicy,
+            report: com.example.domain.GapAnalysisReport
+        ) {
+            finishCurrentPage()
+            beginPage(anchorPolicy, isCoverHeader = false)
+            canvas?.drawText(
+                "COMPLIANCE READINESS & GAP ANALYSIS SUMMARY",
+                MARGIN_X,
+                cursorY,
+                headingPaint
+            )
+            cursorY += 18f
+            drawWrappedText(
+                anchorPolicy,
+                "Overall Readiness: ${report.overallReadinessPercent}%  •  Policy Coverage: ${report.policyCoverageCount}/${report.totalPolicyTemplates}  •  Controls Implemented: ${report.completedControls}/${report.totalControlsInGenerated}",
+                monoPaint,
+                MARGIN_X,
+                CONTENT_WIDTH,
+                14f
+            )
+            cursorY += 6f
+            drawWrappedText(
+                anchorPolicy,
+                "Open Gaps: ${report.criticalCount} Critical  •  ${report.highCount} High  •  ${report.mediumCount} Medium",
+                mutedPaint,
+                MARGIN_X,
+                CONTENT_WIDTH,
+                14f
+            )
+            cursorY += 10f
+            report.gaps.take(16).forEachIndexed { idx, gap ->
+                ensureSpace(anchorPolicy, 38f)
+                drawWrappedText(
+                    anchorPolicy,
+                    "${idx + 1}. [${gap.severity.label.uppercase()}] ${gap.title} (${gap.controlReference})",
+                    headingPaint.apply { textSize = 9.5f },
+                    MARGIN_X,
+                    CONTENT_WIDTH,
+                    13f
+                )
+                drawWrappedText(
+                    anchorPolicy,
+                    gap.remediation,
+                    mutedPaint,
+                    MARGIN_X + 12f,
+                    CONTENT_WIDTH - 12f,
+                    12f
+                )
+                cursorY += 4f
+            }
+            headingPaint.textSize = 12.5f
         }
 
         private fun ensureSpace(policy: GeneratedPolicy, neededHeight: Float) {

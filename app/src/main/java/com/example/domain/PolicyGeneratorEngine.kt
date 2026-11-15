@@ -698,4 +698,130 @@ object PolicyGeneratorEngine {
             appendLine("Approved by Executive Management & Data Protection Officer — ${profile.companyName}")
         }
     }
+
+    fun analyzeGaps(
+        profile: OrganizationProfile,
+        generatedPolicies: List<GeneratedPolicy>,
+        checkedChecklistIds: Set<String>
+    ): GapAnalysisReport {
+        val generatedMap = generatedPolicies.associateBy { it.type }
+        val gaps = mutableListOf<PolicyGapItem>()
+
+        // 1. Missing Policy Domain Gaps
+        PolicyType.entries.forEach { type ->
+            if (type !in generatedMap) {
+                val (severity, ref, desc, fix) = when (type) {
+                    PolicyType.DATA_PROTECTION -> Quad(
+                        GapSeverity.CRITICAL,
+                        "NDPA Sec. 24–44 & ISO A.5.34",
+                        "${profile.companyName} lacks a formal Data Protection & Privacy Policy governing ${profile.industry.regulatedDataCategories}.",
+                        "Generate the Data Protection Policy to establish lawful processing bases, 30-day DSR workflows, and DPO governance."
+                    )
+                    PolicyType.INCIDENT_RESPONSE -> Quad(
+                        GapSeverity.CRITICAL,
+                        "NDPA Sec. 40 (72h) & ISO A.5.24–A.5.28",
+                        "No Incident Response & Breach Policy exists to enforce the statutory 72-hour NDPC breach notification window.",
+                        "Generate the Incident Response Policy to define CSIRT escalation, forensic custody, and NDPC reporting."
+                    )
+                    PolicyType.PASSWORD -> Quad(
+                        GapSeverity.HIGH,
+                        "ISO A.5.17, A.8.5 & NDPA Sec. 39",
+                        "Missing authentication standards exposes ${profile.industry.label} portals to credential stuffing and SIM-swap MFA bypass.",
+                        "Generate the Password & Auth Policy to mandate ${profile.size.minPasswordLength}+ char passphrases and FIDO2/TOTP MFA."
+                    )
+                    PolicyType.ACCEPTABLE_USE -> Quad(
+                        GapSeverity.HIGH,
+                        "ISO A.5.10, A.6.7, A.8.1",
+                        "No Acceptable Use Policy governs remote endpoints, Shadow IT, or pasting personal data into unapproved AI tools.",
+                        "Generate the Acceptable Use Policy to enforce endpoint encryption, VPN, and staff attestation rules."
+                    )
+                    PolicyType.BUSINESS_CONTINUITY -> Quad(
+                        if (profile.size == CompanySize.ENTERPRISE || profile.size == CompanySize.MID_MARKET) GapSeverity.HIGH else GapSeverity.MEDIUM,
+                        "ISO A.5.29–A.5.30 & NDPA Sec. 39",
+                        "Without a Business Continuity Policy, outage recovery and immutable ransomware backup SLAs are undefined.",
+                        "Generate the Business Continuity Policy to formalize RTO/RPO targets and 3-2-1-1 backup testing."
+                    )
+                }
+                gaps.add(
+                    PolicyGapItem(
+                        id = "gap_missing_${type.name}",
+                        title = "Missing ${type.fullTitle}",
+                        description = desc,
+                        remediation = fix,
+                        severity = severity,
+                        category = GapCategory.MISSING_POLICY,
+                        policyType = type,
+                        controlReference = ref
+                    )
+                )
+            }
+        }
+
+        // 2. Per-Policy Implementation Progress & Open Control Gaps
+        val progressMetrics = mutableListOf<PolicyProgressMetric>()
+        var totalControls = 0
+        var completedControls = 0
+
+        generatedPolicies.forEach { policy ->
+            val total = policy.checklist.size
+            val done = policy.checklist.count { "${policy.type.name}_${it.id}" in checkedChecklistIds }
+            totalControls += total
+            completedControls += done
+            progressMetrics.add(
+                PolicyProgressMetric(
+                    policyType = policy.type,
+                    completedSteps = done,
+                    totalSteps = total
+                )
+            )
+
+            policy.checklist.forEach { item ->
+                val isDone = "${policy.type.name}_${item.id}" in checkedChecklistIds
+                if (!isDone) {
+                    val severity = when {
+                        item.controlCode.contains("Sec. 40") ||
+                            item.controlCode.contains("A.8.5") ||
+                            item.controlCode.contains("Sec. 32") ||
+                            item.controlCode.contains("A.8.13") -> GapSeverity.CRITICAL
+                        item.timeframe.contains("Week 1") ||
+                            item.timeframe.contains("Week 2") ||
+                            item.controlCode.contains("NDPA") -> GapSeverity.HIGH
+                        else -> GapSeverity.MEDIUM
+                    }
+                    gaps.add(
+                        PolicyGapItem(
+                            id = "gap_ctrl_${policy.type.name}_${item.id}",
+                            title = item.actionTitle,
+                            description = item.guidance,
+                            remediation = "Assign to ${item.ownerRole} • Target: ${item.timeframe}",
+                            severity = severity,
+                            category = GapCategory.OPEN_CONTROL,
+                            policyType = policy.type,
+                            controlReference = item.controlCode,
+                            checklistItemId = item.id
+                        )
+                    )
+                }
+            }
+        }
+
+        // Weighted readiness: 40% policy domain coverage (out of 5) + 60% checklist control completion
+        val coverageRatio = generatedPolicies.size.toFloat() / PolicyType.entries.size.toFloat()
+        val checklistRatio = if (totalControls == 0) 0f else completedControls.toFloat() / totalControls.toFloat()
+        val readinessPct = ((coverageRatio * 40f) + (checklistRatio * 60f)).toInt().coerceIn(0, 100)
+
+        val sortedGaps = gaps.sortedWith(compareBy<PolicyGapItem> { it.severity.ordinal }.thenBy { it.category.ordinal })
+
+        return GapAnalysisReport(
+            overallReadinessPercent = readinessPct,
+            policyCoverageCount = generatedPolicies.size,
+            totalPolicyTemplates = PolicyType.entries.size,
+            completedControls = completedControls,
+            totalControlsInGenerated = totalControls,
+            perPolicyProgress = progressMetrics,
+            gaps = sortedGaps
+        )
+    }
+
+    private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 }

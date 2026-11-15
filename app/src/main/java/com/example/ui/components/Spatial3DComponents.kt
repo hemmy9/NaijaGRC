@@ -402,6 +402,7 @@ fun Spatial3DPolicyDeck(
     availableTypes: List<PolicyType>,
     selectedType: PolicyType,
     versionByType: Map<PolicyType, String>,
+    progressByType: Map<PolicyType, Float> = emptyMap(),
     onSelectPolicy: (PolicyType) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -430,6 +431,8 @@ fun Spatial3DPolicyDeck(
                 PolicyType.INCIDENT_RESPONSE -> Color(0xFFB91C1C)
                 PolicyType.BUSINESS_CONTINUITY -> Color(0xFF0F766E)
             }
+            val progress = (progressByType[type] ?: 0f).coerceIn(0f, 1f)
+            val pct = (progress * 100).toInt()
 
             val scale by animateFloatAsState(
                 targetValue = if (isSelected) 1.03f else 0.96f,
@@ -452,7 +455,7 @@ fun Spatial3DPolicyDeck(
 
             val shape = RoundedCornerShape(18.dp)
             val cardModifier = if (useHorizontalScroll) {
-                Modifier.width(142.dp)
+                Modifier.width(148.dp)
             } else {
                 Modifier.weight(1f)
             }
@@ -498,7 +501,7 @@ fun Spatial3DPolicyDeck(
                     )
                 ) {
                     Column(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -520,7 +523,7 @@ fun Spatial3DPolicyDeck(
                                 maxLines = 1
                             )
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(7.dp))
                         Text(
                             text = type.shortTitle,
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
@@ -528,10 +531,29 @@ fun Spatial3DPolicyDeck(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Spacer(modifier = Modifier.height(2.dp))
+                        Spacer(modifier = Modifier.height(5.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isSelected) Color.White.copy(alpha = 0.25f)
+                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+                                )
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(progress)
+                                    .height(4.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isSelected) Gold400 else accent)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
                         Text(
-                            text = if (isSelected) "Active View" else "Tap to View",
-                            style = MaterialTheme.typography.bodySmall,
+                            text = "$pct% Ready",
+                            style = MaterialTheme.typography.labelSmall,
                             color = if (isSelected) Color.White.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1
                         )

@@ -191,3 +191,52 @@ data class PolicyVersionEntry(
     val policy: GeneratedPolicy,
     val profileSnapshot: OrganizationProfile
 )
+
+enum class GapSeverity(val label: String) {
+    CRITICAL("Critical"),
+    HIGH("High"),
+    MEDIUM("Medium")
+}
+
+enum class GapCategory(val label: String) {
+    MISSING_POLICY("Missing Policy"),
+    OPEN_CONTROL("Open Control")
+}
+
+data class PolicyProgressMetric(
+    val policyType: PolicyType,
+    val completedSteps: Int,
+    val totalSteps: Int
+) {
+    val fraction: Float
+        get() = if (totalSteps == 0) 0f else completedSteps.toFloat() / totalSteps.toFloat()
+
+    val percentage: Int
+        get() = (fraction * 100).toInt()
+}
+
+data class PolicyGapItem(
+    val id: String,
+    val title: String,
+    val description: String,
+    val remediation: String,
+    val severity: GapSeverity,
+    val category: GapCategory,
+    val policyType: PolicyType,
+    val controlReference: String,
+    val checklistItemId: String? = null
+)
+
+data class GapAnalysisReport(
+    val overallReadinessPercent: Int,
+    val policyCoverageCount: Int,
+    val totalPolicyTemplates: Int,
+    val completedControls: Int,
+    val totalControlsInGenerated: Int,
+    val perPolicyProgress: List<PolicyProgressMetric>,
+    val gaps: List<PolicyGapItem>
+) {
+    val criticalCount: Int get() = gaps.count { it.severity == GapSeverity.CRITICAL }
+    val highCount: Int get() = gaps.count { it.severity == GapSeverity.HIGH }
+    val mediumCount: Int get() = gaps.count { it.severity == GapSeverity.MEDIUM }
+}
