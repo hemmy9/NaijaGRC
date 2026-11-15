@@ -1,0 +1,6 @@
+{
+  "name": "NaijaGRC",
+  "description": "Nigeria NDPA 2023 and ISO/IEC 27001 policy generator for Data Protection, Acceptable Use, and Password policies with PDF export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,27 @@
+<resources>
+    <string name="app_name">NaijaGRC</string>
+    <string name="app_subtitle">NDPA 2023 &amp; ISO/IEC 27001 Policy Studio</string>
+    <string name="hero_banner_desc">3D emerald and glass compliance shield visual</string>
+    <string name="section_org_profile">Organization Profile</string>
+    <string name="label_company_name">Company Legal Name</string>
+    <string name="placeholder_company_name">e.g. PayStack Holdings Nigeria Ltd</string>
+    <string name="error_company_name">Enter your organization name (at least 2 characters)</string>
+    <string name="label_company_size">Company Size &amp; Tier</string>
+    <string name="label_industry">Industry Sector</string>
+    <string name="label_dpo_email">DPO / Security Contact Email (Optional)</string>
+    <string name="placeholder_dpo_email">e.g. dpo@company.ng</string>
+    <string name="label_select_policies">Policies to Generate</string>
+    <string name="error_select_policies">Select at least one policy template to generate</string>
+    <string name="btn_generate_policies">Generate %1$d Compliance Policies</string>
+    <string name="btn_generate_single_policy">Generate 1 Compliance Policy</string>
+    <string name="btn_edit_profile">Edit Profile</string>
+    <string name="btn_export_active_pdf">Save Policy PDF</string>
+    <string name="btn_export_bundle_pdf">Save All (%1$d) Bundle PDF</string>
+    <string name="btn_share_pdf">Share PDF</string>
+    <string name="btn_copy_policy">Copy Text</string>
+    <string name="btn_version_history">History (%1$d)</string>
+    <string name="btn_new_revision">New Revision</string>
+    <string name="msg_copied">Policy text copied to clipboard</string>
+    <string name="msg_pdf_saved">PDF saved successfully</string>
+    <string name="msg_pdf_error">Could not export PDF. Please try again.</string>
+</resources>
